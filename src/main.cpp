@@ -52,7 +52,9 @@ int64 nHPSTimerStart;
 
 // Settings
 int fGenerateBitcoins = false;
-int64 nTransactionFee = 0;
+int64 nBaseTransactionFee = 0;
+int64 nPerKBTransactionFee = 0;
+int fOverrideTransactionFee = false;
 CAddress addrIncoming;
 int fLimitProcessors = false;
 int nLimitProcessors = 1;
@@ -331,7 +333,7 @@ bool CTransaction::CheckTransaction() const
     return true;
 }
 
-bool CTransaction::AcceptToMemoryPool(CTxDB& txdb, bool fCheckInputs, bool* pfMissingInputs)
+bool CTransaction::AcceptToMemoryPool(CTxDB& txdb, bool fCheckInputs, bool* pfMissingInputs, bool fCheckFee)
 {
     if (pfMissingInputs)
         *pfMissingInputs = false;
@@ -410,13 +412,13 @@ bool CTransaction::AcceptToMemoryPool(CTxDB& txdb, bool fCheckInputs, bool* pfMi
         }
 
         // Don't accept it if it can't get into a block
-        if (nFees < GetMinFee(1000, true, true))
+        if (fCheckFee && nFees < GetMinFee(1000, true, true))
             return error("AcceptToMemoryPool() : not enough fees");
 
         // Continuously rate-limit free transactions
         // This mitigates 'penny-flooding' -- sending thousands of free transactions just to
         // be annoying or make other's transactions take longer to confirm.
-        if (nFees < MIN_RELAY_TX_FEE)
+        if (fCheckFee && nFees < MIN_RELAY_TX_FEE)
         {
             static CCriticalSection cs;
             static double dFreeCount;
@@ -459,10 +461,10 @@ bool CTransaction::AcceptToMemoryPool(CTxDB& txdb, bool fCheckInputs, bool* pfMi
     return true;
 }
 
-bool CTransaction::AcceptToMemoryPool(bool fCheckInputs, bool* pfMissingInputs)
+bool CTransaction::AcceptToMemoryPool(bool fCheckInputs, bool* pfMissingInputs, bool fCheckFee)
 {
     CTxDB txdb("r");
-    return AcceptToMemoryPool(txdb, fCheckInputs, pfMissingInputs);
+    return AcceptToMemoryPool(txdb, fCheckInputs, pfMissingInputs, fCheckFee);
 }
 
 bool CTransaction::AddToMemoryPoolUnchecked()
@@ -533,17 +535,17 @@ int CMerkleTx::GetBlocksToMaturity() const
 }
 
 
-bool CMerkleTx::AcceptToMemoryPool(CTxDB& txdb, bool fCheckInputs)
+bool CMerkleTx::AcceptToMemoryPool(CTxDB& txdb, bool fCheckInputs, bool fCheckFee)
 {
     if (fClient)
     {
         if (!IsInMainChain() && !ClientConnectInputs())
             return false;
-        return CTransaction::AcceptToMemoryPool(txdb, false);
+        return CTransaction::AcceptToMemoryPool(txdb, false, (bool*)NULL, fCheckFee);
     }
     else
     {
-        return CTransaction::AcceptToMemoryPool(txdb, fCheckInputs);
+        return CTransaction::AcceptToMemoryPool(txdb, fCheckInputs, (bool*)NULL, fCheckFee);
     }
 }
 

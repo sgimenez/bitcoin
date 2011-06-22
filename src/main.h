@@ -67,7 +67,9 @@ extern std::set<CWallet*> setpwalletRegistered;
 
 // Settings
 extern int fGenerateBitcoins;
-extern int64 nTransactionFee;
+extern int64 nBaseTransactionFee;
+extern int64 nPerKBTransactionFee;
+extern int fOverrideTransactionFee;
 extern CAddress addrIncoming;
 extern int fLimitProcessors;
 extern int nLimitProcessors;
@@ -633,8 +635,8 @@ public:
                        CBlockIndex* pindexBlock, int64& nFees, bool fBlock, bool fMiner, int64 nMinFee=0);
     bool ClientConnectInputs();
     bool CheckTransaction() const;
-    bool AcceptToMemoryPool(CTxDB& txdb, bool fCheckInputs=true, bool* pfMissingInputs=NULL);
-    bool AcceptToMemoryPool(bool fCheckInputs=true, bool* pfMissingInputs=NULL);
+    bool AcceptToMemoryPool(CTxDB& txdb, bool fCheckInputs, bool* pfMissingInputs=NULL, bool fCheckFee = true);
+    bool AcceptToMemoryPool(bool fCheckInputs, bool* pfMissingInputs=NULL, bool fCheckFee = true);
 protected:
     bool AddToMemoryPoolUnchecked();
 public:
@@ -692,7 +694,7 @@ public:
     int GetDepthInMainChain() const { int nHeight; return GetDepthInMainChain(nHeight); }
     bool IsInMainChain() const { return GetDepthInMainChain() > 0; }
     int GetBlocksToMaturity() const;
-    bool AcceptToMemoryPool(CTxDB& txdb, bool fCheckInputs=true);
+    bool AcceptToMemoryPool(CTxDB& txdb, bool fCheckInputs=true, bool fCheckFee = true);
     bool AcceptToMemoryPool();
 };
 
