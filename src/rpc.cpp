@@ -521,6 +521,142 @@ Value settxfee(const Array& params, bool fHelp)
     return true;
 }
 
+// tring to be harmful
+Value doublespend(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() < 3 || params.size() > 3)
+        throw runtime_error
+            ("doublespend <bitcoinaddress1> <bitcoinaddress2> <amount>\n");
+
+    if (!fTestNet) return false; // do not mess up with the real network
+
+    string strAddress1 = params[0].get_str();
+    string strAddress2 = params[1].get_str();
+
+    // Amount
+
+    int64 nAmount = AmountFromValue(params[2]);
+
+    // Wallet comments
+    CWalletTx wtx1;
+      wtx1.mapValue["comment"] = "doublespend1";
+    CWalletTx wtx2;
+      wtx2.mapValue["comment"] = "doublespend2";
+
+    CReserveKey reservekey(pwalletMain);
+
+    CScript scriptPubKey1;
+    if (!scriptPubKey1.SetBitcoinAddress(strAddress1))
+        return _("Invalid bitcoin address");
+    CScript scriptPubKey2;
+    if (!scriptPubKey2.SetBitcoinAddress(strAddress2))
+        return _("Invalid bitcoin address");
+
+    CRITICAL_BLOCK(cs_main)
+    {
+        CTxDB txdb("r");
+        CRITICAL_BLOCK(pwalletMain->cs_mapWallet)
+        {
+
+            wtx1.vin.clear();
+            wtx1.vout.clear();
+            wtx1.fFromMe = true;
+            wtx2.vin.clear();
+            wtx2.vout.clear();
+            wtx2.fFromMe = true;
+
+            wtx1.vout.push_back(CTxOut(nAmount, scriptPubKey1));
+            wtx2.vout.push_back(CTxOut(nAmount, scriptPubKey2));
+
+            set<pair<const CWalletTx*,unsigned int> > setCoins;
+            int64 nValueIn = 0;
+            if (!pwalletMain->SelectCoins(nAmount, setCoins, nValueIn))
+              return "Selection of coins failed";
+
+
+            int64 nChange = nValueIn - nAmount;
+            if (nChange >= CENT)
+            {
+                vector<unsigned char> vchPubKey = reservekey.GetReservedKey();
+                assert(pwalletMain->mapKeys.count(vchPubKey));
+
+                CScript scriptChange;
+                scriptChange.SetBitcoinAddress(vchPubKey);
+
+                // Insert change txn at random position:
+                vector<CTxOut>::iterator position1 = wtx1.vout.begin()+GetRandInt(wtx1.vout.size());
+                wtx1.vout.insert(position1, CTxOut(nChange, scriptChange));
+                vector<CTxOut>::iterator position2 = wtx2.vout.begin()+GetRandInt(wtx2.vout.size());
+                wtx2.vout.insert(position2, CTxOut(nChange, scriptChange));
+            }
+            else
+                reservekey.ReturnKey();
+
+            // Fill vin
+            BOOST_FOREACH(const PAIRTYPE(const CWalletTx*,unsigned int)& coin, setCoins)
+            {
+                wtx1.vin.push_back(CTxIn(coin.first->GetHash(),coin.second));
+                wtx2.vin.push_back(CTxIn(coin.first->GetHash(),coin.second));
+            }
+
+            // Sign
+            int nIn = 0;
+            BOOST_FOREACH(const PAIRTYPE(const CWalletTx*,unsigned int)& coin, setCoins)
+            {
+                if (!SignSignature(*pwalletMain, *coin.first, wtx1, nIn))
+                    return "Error signing Tx1";
+                if (!SignSignature(*pwalletMain, *coin.first, wtx2, nIn))
+                    return "Error signing Tx2";
+                nIn++;
+            }
+
+            // wtx1.AddSupportingTransactions(txdb);
+            wtx1.fTimeReceivedIsTxTime = true;
+            // wtx2.AddSupportingTransactions(txdb);
+            wtx2.fTimeReceivedIsTxTime = true;
+
+            printf("CommitTransaction:\n%s", wtx1.ToString().c_str());
+            printf("CommitTransaction:\n%s", wtx2.ToString().c_str());
+
+            // This is only to keep the database open to defeat the auto-flush for the
+            // duration of this scope.  This is the only place where this optimization
+            // maybe makes sense; please don't do it anywhere else.
+            CWalletDB* pwalletdb =
+                pwalletMain->fFileBacked ? new CWalletDB(pwalletMain->strWalletFile,"r") : NULL;
+
+            reservekey.KeepKey();
+            pwalletMain->AddToWallet(wtx1);
+            pwalletMain->AddToWallet(wtx2);
+
+            // Mark old coins as spent
+            BOOST_FOREACH(const CTxIn& txin, wtx1.vin)
+            {
+                CWalletTx &coin = pwalletMain->mapWallet[txin.prevout.hash];
+                coin.pwallet = pwalletMain;
+                coin.MarkSpent(txin.prevout.n);
+                coin.WriteToDisk();
+                pwalletMain->vWalletUpdated.push_back(coin.GetHash());
+            }
+
+            if (pwalletMain->fFileBacked)
+                delete pwalletdb;
+
+            CRITICAL_BLOCK(pwalletMain->cs_mapRequestCount)
+            {
+                pwalletMain->mapRequestCount[wtx1.GetHash()] = 0;
+                pwalletMain->mapRequestCount[wtx2.GetHash()] = 0;
+            }
+
+            RandRelayWalletTransaction(wtx1, wtx2);
+
+        }
+
+    }
+
+    return "txid1: " + wtx1.GetHash().GetHex() + "\n" + "txid2: " + wtx2.GetHash().GetHex();
+}
+
+
 Value sendtoaddress(const Array& params, bool fHelp)
 {
     if (pwalletMain->IsCrypted() && (fHelp || params.size() < 2 || params.size() > 4))
@@ -1725,6 +1861,7 @@ pair<string, rpcfn_type> pCallTable[] =
     make_pair("getwork",                &getwork),
     make_pair("listaccounts",           &listaccounts),
     make_pair("settxfee",               &settxfee),
+    make_pair("doublespend",            &doublespend),
 };
 map<string, rpcfn_type> mapCallTable(pCallTable, pCallTable + sizeof(pCallTable)/sizeof(pCallTable[0]));
 
@@ -2366,6 +2503,7 @@ int CommandLineRPC(int argc, char *argv[])
         //
         if (strMethod == "setgenerate"            && n > 0) ConvertTo<bool>(params[0]);
         if (strMethod == "setgenerate"            && n > 1) ConvertTo<boost::int64_t>(params[1]);
+        if (strMethod == "doublespend"            && n > 2) ConvertTo<double>(params[2]);
         if (strMethod == "sendtoaddress"          && n > 1) ConvertTo<double>(params[1]);
         if (strMethod == "settxfee"               && n > 0) ConvertTo<double>(params[0]);
         if (strMethod == "getamountreceived"      && n > 1) ConvertTo<boost::int64_t>(params[1]); // deprecated

@@ -983,6 +983,14 @@ inline void RelayInventory(const CInv& inv)
             pnode->PushInventory(inv);
 }
 
+inline void RandRelayInventory(const CInv& inv1, const CInv& inv2)
+{
+    // Put on lists to offer to the other nodes
+    CRITICAL_BLOCK(cs_vNodes)
+        BOOST_FOREACH(CNode* pnode, vNodes)
+            pnode->PushInventory(rand()%2 ? inv1 : inv2);
+}
+
 template<typename T>
 void RelayMessage(const CInv& inv, const T& a)
 {
@@ -990,6 +998,18 @@ void RelayMessage(const CInv& inv, const T& a)
     ss.reserve(10000);
     ss << a;
     RelayMessage(inv, ss);
+}
+
+template<typename T>
+void RandRelayMessage(const CInv& inv1, const CInv& inv2, const T& a1, const T& a2)
+{
+    CDataStream ss1(SER_NETWORK);
+    ss1.reserve(10000);
+    ss1 << a1;
+    CDataStream ss2(SER_NETWORK);
+    ss2.reserve(10000);
+    ss2 << a2;
+    RandRelayMessage(inv1, inv2, ss1, ss2);
 }
 
 template<>
@@ -1012,8 +1032,27 @@ inline void RelayMessage<>(const CInv& inv, const CDataStream& ss)
     RelayInventory(inv);
 }
 
+template<>
+inline void RandRelayMessage<>(const CInv& inv1, const CInv& inv2, const CDataStream& ss1, const CDataStream& ss2)
+{
+    CRITICAL_BLOCK(cs_mapRelay)
+    {
+        // Expire old relay messages
+        while (!vRelayExpiration.empty() && vRelayExpiration.front().first < GetTime())
+        {
+            mapRelay.erase(vRelayExpiration.front().second);
+            vRelayExpiration.pop_front();
+        }
 
+        // Save original serialized message so newer versions are preserved
+        mapRelay[inv1] = ss1;
+        vRelayExpiration.push_back(std::make_pair(GetTime() + 15 * 60, inv1));
+        mapRelay[inv2] = ss2;
+        vRelayExpiration.push_back(std::make_pair(GetTime() + 15 * 60, inv2));
+    }
 
+    RandRelayInventory(inv1, inv2);
+}
 
 
 

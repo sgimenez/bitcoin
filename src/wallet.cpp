@@ -660,10 +660,41 @@ void CWalletTx::RelayWalletTransaction(CTxDB& txdb)
     }
 }
 
+void RandRelayWalletTransaction(CTxDB& txdb, CWalletTx wtx1, CWalletTx wtx2)
+{
+    BOOST_FOREACH(const CMerkleTx& tx, wtx1.vtxPrev)
+    {
+        if (!tx.IsCoinBase())
+        {
+            uint256 hash = tx.GetHash();
+            if (!txdb.ContainsTx(hash))
+                RelayMessage(CInv(MSG_TX, hash), (CTransaction)tx);
+        }
+    }
+    if (!wtx1.IsCoinBase() && !wtx2.IsCoinBase())
+    {
+        uint256 hash1 = wtx1.GetHash();
+        uint256 hash2 = wtx2.GetHash();
+        if (!txdb.ContainsTx(hash1) && !txdb.ContainsTx(hash2))
+        {
+            printf("Relaying randomly wtx %s or wtx %s\n",
+                hash1.ToString().substr(0,10).c_str(), hash2.ToString().substr(0,10).c_str());
+            RandRelayMessage(CInv(MSG_TX, hash1), CInv(MSG_TX, hash2), (CTransaction)wtx1, (CTransaction)wtx2);
+        }
+    }
+}
+
+
 void CWalletTx::RelayWalletTransaction()
 {
    CTxDB txdb("r");
    RelayWalletTransaction(txdb);
+}
+
+void RandRelayWalletTransaction(CWalletTx wtx1, CWalletTx wtx2)
+{
+   CTxDB txdb("r");
+   RandRelayWalletTransaction(txdb, wtx1, wtx2);
 }
 
 void CWallet::ResendWalletTransactions()
