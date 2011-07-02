@@ -141,9 +141,18 @@ bool AppInit2(int argc, char* argv[])
 
     if (mapArgs.count("-datadir"))
     {
-        filesystem::path pathDataDir = filesystem::system_complete(mapArgs["-datadir"]);
-        strlcpy(pszSetDataDir, pathDataDir.string().c_str(), sizeof(pszSetDataDir));
+        if (filesystem::is_directory(filesystem::system_complete(mapArgs["-datadir"])))
+        {
+            filesystem::path pathDataDir = filesystem::system_complete(mapArgs["-datadir"]);
+            strlcpy(pszSetDataDir, pathDataDir.string().c_str(), sizeof(pszSetDataDir));
+        }
+        else
+        {
+            fprintf(stderr, "Error: Specified directory does not exist\n");
+            Shutdown(NULL);
+        }
     }
+
 
     ReadConfigFile(mapArgs, mapMultiArgs); // Must be done after processing datadir
 
@@ -486,7 +495,9 @@ bool AppInit2(int argc, char* argv[])
         }
     }
 
-    if (mapArgs.count("-dnsseed"))
+    if (GetBoolArg("-nodnsseed"))
+        printf("DNS seeding disabled\n");
+    else
         DNSAddressSeed();
 
     if (mapArgs.count("-paybasetxfee"))

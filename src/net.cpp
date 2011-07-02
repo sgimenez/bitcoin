@@ -9,6 +9,10 @@
 #include "init.h"
 #include "strlcpy.h"
 
+#ifdef __WXMSW__
+#include <string.h>
+#endif
+
 #ifdef USE_UPNP
 #include <miniupnpc/miniwget.h>
 #include <miniupnpc/miniupnpc.h>
@@ -148,7 +152,7 @@ bool ConnectSocket(const CAddress& addrConnect, SOCKET& hSocketRet, int nTimeout
             }
             if (nRet != 0)
             {
-                printf("connect() failed after select(): %i\n",nRet);
+                printf("connect() failed after select(): %s\n",strerror(nRet));
                 closesocket(hSocket);
                 return false;
             }
@@ -159,7 +163,7 @@ bool ConnectSocket(const CAddress& addrConnect, SOCKET& hSocketRet, int nTimeout
         else
 #endif
         {
-            printf("connect() failed: %s\n",WSAGetLastError());
+            printf("connect() failed: %i\n",WSAGetLastError());
             closesocket(hSocket);
             return false;
         }
@@ -915,7 +919,7 @@ void ThreadSocketHandler2(void* parg)
                     CDataStream& vRecv = pnode->vRecv;
                     unsigned int nPos = vRecv.size();
 
-                    if (nPos > 1000*GetArg("-maxreceivebuffer", 10*1000)) {
+                    if (nPos > ReceiveBufferSize()) {
                         if (!pnode->fDisconnect)
                             printf("socket recv flood control disconnect (%d bytes)\n", vRecv.size());
                         pnode->CloseSocketDisconnect();
@@ -980,7 +984,7 @@ void ThreadSocketHandler2(void* parg)
                                 pnode->CloseSocketDisconnect();
                             }
                         }
-                        if (vSend.size() > 1000*GetArg("-maxsendbuffer", 10*1000)) {
+                        if (vSend.size() > SendBufferSize()) {
                             if (!pnode->fDisconnect)
                                 printf("socket send flood control disconnect (%d bytes)\n", vSend.size());
                             pnode->CloseSocketDisconnect();
@@ -1139,25 +1143,29 @@ void MapPort(bool fMapPort)
 static const char *strDNSSeed[] = {
     "bitseed.xf2.org",
     "bitseed.bitcoin.org.uk",
+    "dnsseed.bluematt.me",
 };
 
 void DNSAddressSeed()
 {
     int found = 0;
 
-    printf("Loading addresses from DNS seeds (could take a while)\n");
+    if (!fTestNet)
+    {
+        printf("Loading addresses from DNS seeds (could take a while)\n");
 
-    for (int seed_idx = 0; seed_idx < ARRAYLEN(strDNSSeed); seed_idx++) {
-        vector<CAddress> vaddr;
-        if (Lookup(strDNSSeed[seed_idx], vaddr, NODE_NETWORK, -1, true))
-        {
-            BOOST_FOREACH (CAddress& addr, vaddr)
+        for (int seed_idx = 0; seed_idx < ARRAYLEN(strDNSSeed); seed_idx++) {
+            vector<CAddress> vaddr;
+            if (Lookup(strDNSSeed[seed_idx], vaddr, NODE_NETWORK, -1, true))
             {
-                if (addr.GetByte(3) != 127)
+                BOOST_FOREACH (CAddress& addr, vaddr)
                 {
-                    addr.nTime = 0;
-                    AddAddress(addr);
-                    found++;
+                    if (addr.GetByte(3) != 127)
+                    {
+                        addr.nTime = 0;
+                        AddAddress(addr);
+                        found++;
+                    }
                 }
             }
         }

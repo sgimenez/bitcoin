@@ -977,26 +977,38 @@ bool CWallet::LoadWallet(bool& fFirstRunRet)
         return false;
     fFirstRunRet = vchDefaultKey.empty();
 
-    if (mapKeys.count(vchDefaultKey))
+    if (!mapKeys.count(vchDefaultKey))
     {
-        // Set keyUser
-        keyUser.SetPubKey(vchDefaultKey);
-        keyUser.SetPrivKey(mapKeys[vchDefaultKey]);
-    }
-    else
-    {
-        // Create new keyUser and set as default key
+        // Create new default key
         RandAddSeedPerfmon();
 
         vchDefaultKey = GetKeyFromKeyPool();
         if (!SetAddressBookName(PubKeyToAddress(vchDefaultKey), ""))
             return false;
-        CWalletDB(strWalletFile).WriteDefaultKey(keyUser.GetPubKey());
+        CWalletDB(strWalletFile).WriteDefaultKey(vchDefaultKey);
     }
 
     CreateThread(ThreadFlushWalletDB, &strWalletFile);
     return true;
 }
+
+
+bool CWallet::SetAddressBookName(const string& strAddress, const string& strName)
+{
+    mapAddressBook[strAddress] = strName;
+    if (!fFileBacked)
+        return false;
+    return CWalletDB(strWalletFile).WriteName(strAddress, strName);
+}
+
+bool CWallet::DelAddressBookName(const string& strAddress)
+{
+    mapAddressBook.erase(strAddress);
+    if (!fFileBacked)
+        return false;
+    return CWalletDB(strWalletFile).EraseName(strAddress);
+}
+
 
 void CWallet::PrintWallet(const CBlock& block)
 {

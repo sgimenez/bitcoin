@@ -339,12 +339,15 @@ Value getnewaddress(const Array& params, bool fHelp)
     // Generate a new key that is added to wallet
     string strAddress = PubKeyToAddress(pwalletMain->GetKeyFromKeyPool());
 
-    pwalletMain->SetAddressBookName(strAddress, strAccount);
+    // This could be done in the same main CS as GetKeyFromKeyPool.
+    CRITICAL_BLOCK(pwalletMain->cs_mapAddressBook)
+       pwalletMain->SetAddressBookName(strAddress, strAccount);
+
     return strAddress;
 }
 
 
-// requires cs_main, cs_mapWallet locks
+// requires cs_main, cs_mapWallet, cs_mapAddressBook locks
 string GetAccountAddress(string strAccount, bool bForceNew=false)
 {
     string strAddress;
@@ -400,6 +403,7 @@ Value getaccountaddress(const Array& params, bool fHelp)
 
     CRITICAL_BLOCK(cs_main)
     CRITICAL_BLOCK(pwalletMain->cs_mapWallet)
+    CRITICAL_BLOCK(pwalletMain->cs_mapAddressBook)
     {
         ret = GetAccountAddress(strAccount);
     }
@@ -438,9 +442,10 @@ Value setaccount(const Array& params, bool fHelp)
             if (strAddress == GetAccountAddress(strOldAccount))
                 GetAccountAddress(strOldAccount, true);
         }
+
+        pwalletMain->SetAddressBookName(strAddress, strAccount);
     }
 
-    pwalletMain->SetAddressBookName(strAddress, strAccount);
     return Value::null;
 }
 
@@ -1753,7 +1758,7 @@ string rfc1123Time()
     return string(buffer);
 }
 
-string HTTPReply(int nStatus, const string& strMsg)
+static string HTTPReply(int nStatus, const string& strMsg)
 {
     if (nStatus == 401)
         return strprintf("HTTP/1.0 401 Authorization Required\r\n"
@@ -1775,6 +1780,7 @@ string HTTPReply(int nStatus, const string& strMsg)
     string strStatus;
          if (nStatus == 200) strStatus = "OK";
     else if (nStatus == 400) strStatus = "Bad Request";
+    else if (nStatus == 403) strStatus = "Forbidden";
     else if (nStatus == 404) strStatus = "Not Found";
     else if (nStatus == 500) strStatus = "Internal Server Error";
     return strprintf(
@@ -2108,7 +2114,12 @@ void ThreadRPCServer2(void* parg)
 
         // Restrict callers by IP
         if (!ClientAllowed(peer.address().to_string()))
+        {
+            // Only send a 403 if we're not using SSL to prevent a DoS during the SSL handshake.
+            if (!fUseSSL)
+                stream << HTTPReply(403, "") << std::flush;
             continue;
+        }
 
         map<string, string> mapHeaders;
         string strRequest;

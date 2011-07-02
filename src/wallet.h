@@ -47,7 +47,6 @@ public:
     mutable CCriticalSection cs_mapAddressBook;
 
     std::vector<unsigned char> vchDefaultKey;
-    CKey keyUser;
 
     bool AddKey(const CKey& key);
     bool AddToWallet(const CWalletTx& wtxIn);
@@ -151,12 +150,11 @@ public:
     bool LoadWallet(bool& fFirstRunRet);
 //    bool BackupWallet(const std::string& strDest);
 
-    bool SetAddressBookName(const std::string& strAddress, const std::string& strName)
-    {
-        if (!fFileBacked)
-            return false;
-        return CWalletDB(strWalletFile).WriteName(strAddress, strName);
-    }
+    // requires cs_mapAddressBook lock
+    bool SetAddressBookName(const std::string& strAddress, const std::string& strName);
+
+    // requires cs_mapAddressBook lock
+    bool DelAddressBookName(const std::string& strAddress);
 
     void UpdatedTransaction(const uint256 &hashTx)
     {
