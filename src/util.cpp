@@ -1,4 +1,5 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
+// Copyright (c) 2011 The Bitcoin developers
 // Distributed under the MIT/X11 software license, see the accompanying
 // file license.txt or http://www.opensource.org/licenses/mit-license.php.
 #include "headers.h"
@@ -263,8 +264,7 @@ int my_snprintf(char* buffer, size_t limit, const char* format, ...)
     return ret;
 }
 
-
-string strprintf(const char* format, ...)
+string strprintf(const std::string &format, ...)
 {
     char buffer[50000];
     char* p = buffer;
@@ -274,7 +274,7 @@ string strprintf(const char* format, ...)
     {
         va_list arg_ptr;
         va_start(arg_ptr, format);
-        ret = _vsnprintf(p, limit, format, arg_ptr);
+        ret = _vsnprintf(p, limit, format.c_str(), arg_ptr);
         va_end(arg_ptr);
         if (ret >= 0 && ret < limit)
             break;
@@ -291,14 +291,13 @@ string strprintf(const char* format, ...)
     return str;
 }
 
-
-bool error(const char* format, ...)
+bool error(const std::string &format, ...)
 {
     char buffer[50000];
     int limit = sizeof(buffer);
     va_list arg_ptr;
     va_start(arg_ptr, format);
-    int ret = _vsnprintf(buffer, limit, format, arg_ptr);
+    int ret = _vsnprintf(buffer, limit, format.c_str(), arg_ptr);
     va_end(arg_ptr);
     if (ret < 0 || ret >= limit)
     {
@@ -472,40 +471,6 @@ void ParseParameters(int argc, char* argv[])
 }
 
 
-const char* wxGetTranslation(const char* pszEnglish)
-{
-#ifdef GUI
-    // Wrapper of wxGetTranslation returning the same const char* type as was passed in
-    static CCriticalSection cs;
-    CRITICAL_BLOCK(cs)
-    {
-        // Look in cache
-        static map<string, char*> mapCache;
-        map<string, char*>::iterator mi = mapCache.find(pszEnglish);
-        if (mi != mapCache.end())
-            return (*mi).second;
-
-        // wxWidgets translation
-        wxString strTranslated = wxGetTranslation(wxString(pszEnglish, wxConvUTF8));
-
-        // We don't cache unknown strings because caller might be passing in a
-        // dynamic string and we would keep allocating memory for each variation.
-        if (strcmp(pszEnglish, strTranslated.utf8_str()) == 0)
-            return pszEnglish;
-
-        // Add to cache, memory doesn't need to be freed.  We only cache because
-        // we must pass back a pointer to permanently allocated memory.
-        char* pszCached = new char[strlen(strTranslated.utf8_str())+1];
-        strcpy(pszCached, strTranslated.utf8_str());
-        mapCache[pszEnglish] = pszCached;
-        return pszCached;
-    }
-    return NULL;
-#else
-    return pszEnglish;
-#endif
-}
-
 
 bool WildcardMatch(const char* psz, const char* mask)
 {
@@ -574,10 +539,6 @@ void PrintException(std::exception* pex, const char* pszThread)
     printf("\n\n************************\n%s\n", pszMessage);
     fprintf(stderr, "\n\n************************\n%s\n", pszMessage);
     strMiscWarning = pszMessage;
-#ifdef GUI
-    if (wxTheApp && !fDaemon)
-        MyMessageBox(pszMessage, "Bitcoin", wxOK | wxICON_ERROR);
-#endif
     throw;
 }
 
@@ -599,10 +560,6 @@ void PrintExceptionContinue(std::exception* pex, const char* pszThread)
     printf("\n\n************************\n%s\n", pszMessage);
     fprintf(stderr, "\n\n************************\n%s\n", pszMessage);
     strMiscWarning = pszMessage;
-#ifdef GUI
-    if (wxTheApp && !fDaemon)
-        boost::thread(boost::bind(ThreadOneMessageBox, string(pszMessage)));
-#endif
 }
 
 
@@ -814,9 +771,18 @@ void ShrinkDebugFile()
 //  - Median of other nodes's clocks
 //  - The user (asking the user to fix the system clock if the first two disagree)
 //
+static int64 nMockTime = 0;  // For unit testing
+
 int64 GetTime()
 {
+    if (nMockTime) return nMockTime;
+
     return time(NULL);
+}
+
+void SetMockTime(int64 nMockTimeIn)
+{
+    nMockTime = nMockTimeIn;
 }
 
 static int64 nTimeOffset = 0;
@@ -908,4 +874,140 @@ string FormatFullVersion()
 
 
 
+#ifdef DEBUG_LOCKORDER
+//
+// Early deadlock detection.
+// Problem being solved:
+//    Thread 1 locks  A, then B, then C
+//    Thread 2 locks  D, then C, then A
+//     --> may result in deadlock between the two threads, depending on when they run.
+// Solution implemented here:
+// Keep track of pairs of locks: (A before B), (A before C), etc.
+// Complain if any thread trys to lock in a different order.
+//
 
+struct CLockLocation
+{
+    CLockLocation(const char* pszName, const char* pszFile, int nLine)
+    {
+        mutexName = pszName;
+        sourceFile = pszFile;
+        sourceLine = nLine;
+    }
+
+    std::string ToString() const
+    {
+        return mutexName+"  "+sourceFile+":"+itostr(sourceLine);
+    }
+
+private:
+    std::string mutexName;
+    std::string sourceFile;
+    int sourceLine;
+};
+
+typedef std::vector< std::pair<CCriticalSection*, CLockLocation> > LockStack;
+
+static boost::interprocess::interprocess_mutex dd_mutex;
+static std::map<std::pair<CCriticalSection*, CCriticalSection*>, LockStack> lockorders;
+static boost::thread_specific_ptr<LockStack> lockstack;
+
+
+static void potential_deadlock_detected(const std::pair<CCriticalSection*, CCriticalSection*>& mismatch, const LockStack& s1, const LockStack& s2)
+{
+    printf("POTENTIAL DEADLOCK DETECTED\n");
+    printf("Previous lock order was:\n");
+    BOOST_FOREACH(const PAIRTYPE(CCriticalSection*, CLockLocation)& i, s2)
+    {
+        if (i.first == mismatch.first) printf(" (1)");
+        if (i.first == mismatch.second) printf(" (2)");
+        printf(" %s\n", i.second.ToString().c_str());
+    }
+    printf("Current lock order is:\n");
+    BOOST_FOREACH(const PAIRTYPE(CCriticalSection*, CLockLocation)& i, s1)
+    {
+        if (i.first == mismatch.first) printf(" (1)");
+        if (i.first == mismatch.second) printf(" (2)");
+        printf(" %s\n", i.second.ToString().c_str());
+    }
+}
+
+static void push_lock(CCriticalSection* c, const CLockLocation& locklocation)
+{
+    bool fOrderOK = true;
+    if (lockstack.get() == NULL)
+        lockstack.reset(new LockStack);
+
+    if (fDebug) printf("Locking: %s\n", locklocation.ToString().c_str());
+    dd_mutex.lock();
+
+    (*lockstack).push_back(std::make_pair(c, locklocation));
+
+    BOOST_FOREACH(const PAIRTYPE(CCriticalSection*, CLockLocation)& i, (*lockstack))
+    {
+        if (i.first == c) break;
+
+        std::pair<CCriticalSection*, CCriticalSection*> p1 = std::make_pair(i.first, c);
+        if (lockorders.count(p1))
+            continue;
+        lockorders[p1] = (*lockstack);
+
+        std::pair<CCriticalSection*, CCriticalSection*> p2 = std::make_pair(c, i.first);
+        if (lockorders.count(p2))
+        {
+            potential_deadlock_detected(p1, lockorders[p2], lockorders[p1]);
+            break;
+        }
+    }
+    dd_mutex.unlock();
+}
+
+static void pop_lock()
+{
+    if (fDebug) 
+    {
+        const CLockLocation& locklocation = (*lockstack).rbegin()->second;
+        printf("Unlocked: %s\n", locklocation.ToString().c_str());
+    }
+    dd_mutex.lock();
+    (*lockstack).pop_back();
+    dd_mutex.unlock();
+}
+
+void CCriticalSection::Enter(const char* pszName, const char* pszFile, int nLine)
+{
+    push_lock(this, CLockLocation(pszName, pszFile, nLine));
+    mutex.lock();
+}
+void CCriticalSection::Leave()
+{
+    mutex.unlock();
+    pop_lock();
+}
+bool CCriticalSection::TryEnter(const char* pszName, const char* pszFile, int nLine)
+{
+    push_lock(this, CLockLocation(pszName, pszFile, nLine));
+    bool result = mutex.try_lock();
+    if (!result) pop_lock();
+    return result;
+}
+
+#else
+
+void CCriticalSection::Enter(const char*, const char*, int)
+{
+    mutex.lock();
+}
+
+void CCriticalSection::Leave()
+{
+    mutex.unlock();
+}
+
+bool CCriticalSection::TryEnter(const char*, const char*, int)
+{
+    bool result = mutex.try_lock();
+    return result;
+}
+
+#endif /* DEBUG_LOCKORDER */
