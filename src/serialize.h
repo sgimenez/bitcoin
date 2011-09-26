@@ -1,4 +1,5 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
+// Copyright (c) 2011 The Bitcoin developers
 // Distributed under the MIT/X11 software license, see the accompanying
 // file license.txt or http://www.opensource.org/licenses/mit-license.php.
 #ifndef BITCOIN_SERIALIZE_H
@@ -30,6 +31,7 @@ typedef unsigned long long  uint64;
 #endif
 
 #ifdef __WXMSW__
+#include <windows.h>
 // This is used to attempt to keep keying material out of swap
 // Note that VirtualLock does not provide this as a guarantee on Windows,
 // but, in practice, memory that has been VirtualLock'd almost never gets written to
@@ -58,14 +60,17 @@ class CDataStream;
 class CAutoFile;
 static const unsigned int MAX_SIZE = 0x02000000;
 
-static const int VERSION = 32500;
+static const int VERSION = 40100;
 static const char* pszSubVer = "";
 static const bool VERSION_IS_BETA = true;
 
-
-
-
-
+// Used to bypass the rule against non-const reference to temporary
+// where it makes sense with wrappers such as CFlatData or CTxDB
+template<typename T>
+inline T& REF(const T& val)
+{
+    return const_cast<T&>(val);
+}
 
 /////////////////////////////////////////////////////////////////
 //
